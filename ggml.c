@@ -9849,7 +9849,7 @@ static void ggml_compute_forward_qk_slsm(
         const struct ggml_tensor * src2,
         const struct ggml_tensor * src3,
               struct ggml_tensor * dst){
-
+    printf("使用cpu实现的 qk_slsm 算子\n");
 
 
     }

@@ -289,9 +289,9 @@ typedef void (*ggml_cuda_op_qk_slsm_t)(
     const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
     const int64_t src1_padded_row_size, const cudaStream_t & stream);
 
-typdef void(*ggml_cuda_op_qk_slsm_flatten_t)(
+typedef void(*ggml_cuda_op_qk_slsm_flatten_t)(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
-    const float * src0_dd, const float * src1_dd, float * dst_dd, const cudaStream_t & main_stream);
+    float * src0_dd, float * src1_dd, float * dst_dd, const cudaStream_t & main_stream);
 //my op end
 
 // QK = number of values after dequantization
@@ -5165,6 +5165,49 @@ static __global__ void soft_max_f32(const float * x, float * dst, const int ncol
         dst[i] *= inv_tmp;
     }
 }
+// my op start
+static __global__ void add_soft_max_f32(float * x, const float * y,float * dst, const int ncols) {
+    const int row = blockDim.x*blockIdx.x + threadIdx.x;
+    const int block_size = blockDim.y;
+    const int tid = threadIdx.y;
+
+    float max_val = -INFINITY;
+
+    for (int col = tid; col < ncols; col += block_size) {
+        const int i = row*ncols + col;
+        x[i]=x[i]+y[i];
+        max_val = max(max_val, x[i]);
+    }
+
+    // find the max value in the block
+#pragma unroll
+    for (int mask = 16; mask > 0; mask >>= 1) {
+        max_val = max(max_val, __shfl_xor_sync(0xffffffff, max_val, mask, 32));
+    }
+
+    float tmp = 0.f;
+
+    for (int col = tid; col < ncols; col += block_size) {
+        const int i = row*ncols + col;
+        const float val = expf(x[i] - max_val);
+        tmp += val;
+        dst[i] = val;
+    }
+
+    // sum up partial sums
+#pragma unroll
+    for (int mask = 16; mask > 0; mask >>= 1) {
+        tmp += __shfl_xor_sync(0xffffffff, tmp, mask, 32);
+    }
+
+    const float inv_tmp = 1.f / tmp;
+
+    for (int col = tid; col < ncols; col += block_size) {
+        const int i = row*ncols + col;
+        dst[i] *= inv_tmp;
+    }
+}
+// my op end
 
 static __global__ void scale_f32(const float * x, float * dst, const float scale, const int k) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
@@ -5237,11 +5280,17 @@ static void add_f16_f32_f16_cuda(const half * x, const float * y, half * dst, co
 
 // my op start
 static void add_f16_f32_f16_softmax_cuda(const half * x, const float * y, half * dst, const int k, cudaStream_t stream) {
-    printf("use add_f16_f32_f16_softmax_cuda\n")
+    printf("use add_f16_f32_f16_softmax_cuda\n");
     const int num_blocks = (k + CUDA_ADD_BLOCK_SIZE - 1) / CUDA_ADD_BLOCK_SIZE;
     add_f16_f32_f16_softmax<<<num_blocks, CUDA_ADD_BLOCK_SIZE, 0, stream>>>(x, y, dst, k);
 }
 
+static void add_f32_f32_f32_cuda(float * x, float *y ,float * dst, const int ncols_x, const int nrows_x, cudaStream_t stream) {
+    const dim3 block_dims(1, WARP_SIZE, 1);
+    const dim3 block_nums(nrows_x, 1, 1);
+    add_soft_max_f32<<<block_nums, block_dims, 0, stream>>>(x, y,dst, ncols_x);
+
+}
 // my op end
 
 static void add_f16_f32_f32_cuda(const half * x, const float * y, float * dst, const int k, cudaStream_t stream) {
@@ -8535,7 +8584,7 @@ inline void ggml_cuda_op_qk_slsm_cublas(
         }
     }
 
-    ggml_cuda_op_qk_slsm_flatten(dst,dst->src[3],dst,ggml_cuda_op_qk_slms_subadd_softmax)
+    ggml_cuda_op_qk_slsm_flatten(dst,dst->src[3],dst,ggml_cuda_op_qk_slms_subadd_softmax);
 
     
     (void) dst;
@@ -8829,8 +8878,20 @@ static void ggml_cuda_op_qk_slsm(
 
 inline void ggml_cuda_op_qk_slms_subadd_softmax(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
-    const float * src0_dd, const float * src1_dd, float * dst_dd, const cudaStream_t & main_stream) {
+    float * src0_dd, float * src1_dd, float * dst_dd, const cudaStream_t & main_stream) {
+    
+    
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
 
+    const int64_t ne00 = src0->ne[0];
+    const int64_t nrows = ggml_nrows(src0);
+
+    add_f32_f32_f32_cuda(src0_dd, src1_dd,dst_dd, ne00, nrows, main_stream);
+
+    (void) src1;
+    (void) dst;
+    (void) src1_dd;
     
 }
 
