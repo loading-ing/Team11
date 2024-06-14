@@ -4624,8 +4624,8 @@ static struct ggml_tensor * llm_build_kqv(
     struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
     cb(kq, "kq", il);
 
-    kq = ggml_scale(ctx, kq, kq_scale);
-    cb(kq, "kq_scaled", il);
+    // kq = ggml_scale(ctx, kq, kq_scale);
+    // cb(kq, "kq_scaled", il);
 
     if (max_alibi_bias > 0.0f) {
         // TODO: n_head or n_head_kv
@@ -4641,9 +4641,9 @@ static struct ggml_tensor * llm_build_kqv(
     kq = ggml_soft_max(ctx, kq);
     cb(kq, "kq_soft_max", il);
 
-    // QK scaled and softmax
-    struct ggml_tensor * kq = ggml_QK_scaled_softmax(ctx, k, q, kq_scale, max_alibi_bias, n_head, kq_mask);
-    cb(kq, "kq_qk_slsm", il);
+    // // QK scaled and softmax
+    // struct ggml_tensor * kq = ggml_QK_scaled_softmax(ctx, k, q, kq_scale, max_alibi_bias, n_head, kq_mask);
+    // cb(kq, "kq_qk_slsm", il);
 
     // split cached v into n_head heads
     struct ggml_tensor * v =
@@ -4858,16 +4858,9 @@ struct llm_build_context {
                 // compute Q and K and RoPE them
                 struct ggml_tensor * Qcur = ggml_mul_mat(ctx0, model.layers[il].wq, cur);
                 cb(Qcur, "Qcur", il);
-                //myprint
-                struct ggml_tensor *catdim=model.layers[il].wq;
-                printf("layer:%d,wq:%d,%d,%d,%d\n",il,catdim->ne[0],catdim->ne[1],catdim->ne[2],catdim->ne[3]);
 
                 struct ggml_tensor * Kcur = ggml_mul_mat(ctx0, model.layers[il].wk, cur);
                 cb(Kcur, "Kcur", il);
-                //myprint
-                struct ggml_tensor *catdim=model.layers[il].wk;
-                printf("layer:%d,wq:%d,%d,%d,%d\n",il,catdim->ne[0],catdim->ne[1],catdim->ne[2],catdim->ne[3]);
-
 
                 Qcur = ggml_rope_custom(
                     ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens), inp_pos,

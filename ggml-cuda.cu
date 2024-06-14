@@ -8471,6 +8471,101 @@ static void ggml_cuda_op_mul_mat(
 }
 
 // my op start
+inline void ggml_cuda_op_qk_slms_subadd_softmax(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    float * src0_dd, float * src1_dd, float * dst_dd, const cudaStream_t & main_stream) {
+    
+    
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    const int64_t ne00 = src0->ne[0];
+    const int64_t nrows = ggml_nrows(src0);
+
+    add_f32_f32_f32_cuda(src0_dd, src1_dd,dst_dd, ne00, nrows, main_stream);
+
+    (void) src1;
+    (void) dst;
+    (void) src1_dd;
+    
+}
+
+static void ggml_cuda_op_qk_slsm_flatten(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const ggml_cuda_op_qk_slsm_flatten_t op){
+    const int64_t nrows0 = ggml_nrows(src0);
+
+    const bool use_src1 = src1 != nullptr;
+    const int64_t nrows1 = use_src1 ? ggml_nrows(src1) : 1;
+
+    GGML_ASSERT(!use_src1 || src1->backend != GGML_BACKEND_GPU_SPLIT);
+    GGML_ASSERT(              dst->backend != GGML_BACKEND_GPU_SPLIT);
+
+    ggml_tensor_extra_gpu * src0_extra =            (ggml_tensor_extra_gpu *) src0->extra;
+    ggml_tensor_extra_gpu * src1_extra = use_src1 ? (ggml_tensor_extra_gpu *) src1->extra : nullptr;
+    ggml_tensor_extra_gpu * dst_extra  =            (ggml_tensor_extra_gpu *)  dst->extra;
+
+    const bool src0_on_device =             src0->backend == GGML_BACKEND_GPU || src0->backend == GGML_BACKEND_GPU_SPLIT;
+    const bool src1_on_device = use_src1 && src1->backend == GGML_BACKEND_GPU;
+    const bool  dst_on_device =              dst->backend == GGML_BACKEND_GPU;
+
+    const bool src1_stays_on_host = use_src1 && dst->op == GGML_OP_SCALE;
+
+    // dd = data device
+    float * src0_ddf = nullptr;
+    float * src1_ddf = nullptr;
+    float *  dst_ddf = nullptr;
+
+    // as = actual size
+    size_t src0_asf = 0;
+    size_t src1_asf = 0;
+    size_t  dst_asf = 0;
+
+    ggml_cuda_set_device(g_main_device);
+    const cudaStream_t main_stream = g_cudaStreams[g_main_device][0];
+
+    if (src0_on_device) {
+        src0_ddf = (float *) src0_extra->data_device[g_main_device];
+    } else {
+        src0_ddf = (float *) ggml_cuda_pool_malloc(ggml_nbytes(src0), &src0_asf);
+        CUDA_CHECK(ggml_cuda_cpy_tensor_2d(src0_ddf, src0, 0, 0, 0, nrows0, main_stream));
+    }
+
+    if (use_src1 && !src1_stays_on_host) {
+        if (src1_on_device) {
+            src1_ddf = (float *) src1_extra->data_device[g_main_device];
+        } else {
+            src1_ddf = (float *) ggml_cuda_pool_malloc(ggml_nbytes(src1), &src1_asf);
+            CUDA_CHECK(ggml_cuda_cpy_tensor_2d(src1_ddf, src1, 0, 0, 0, nrows1, main_stream));
+        }
+    }
+    if (dst_on_device) {
+        dst_ddf = (float *) dst_extra->data_device[g_main_device];
+    } else {
+        dst_ddf = (float *) ggml_cuda_pool_malloc(ggml_nbytes(dst), &dst_asf);
+    }
+
+    // do the computation
+    op(src0, src1, dst, src0_ddf, src1_ddf, dst_ddf, main_stream);
+    CUDA_CHECK(cudaGetLastError());
+
+    // copy dst to host if necessary
+    if (!dst_on_device) {
+        CUDA_CHECK(cudaMemcpyAsync(dst->data, dst_ddf, ggml_nbytes(dst), cudaMemcpyDeviceToHost, main_stream));
+    }
+
+    if (src0_asf > 0) {
+        ggml_cuda_pool_free(src0_ddf, src0_asf);
+    }
+    if (src1_asf > 0) {
+        ggml_cuda_pool_free(src1_ddf, src1_asf);
+    }
+    if (dst_asf > 0) {
+        ggml_cuda_pool_free(dst_ddf, dst_asf);
+    }
+
+    if (dst->backend == GGML_BACKEND_CPU) {
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+}
 // 使用scale对矩阵进行缩放
 inline void ggml_cuda_op_qk_slsm_cublas(
     const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
@@ -8876,138 +8971,6 @@ static void ggml_cuda_op_qk_slsm(
     }
 }
 
-inline void ggml_cuda_op_qk_slms_subadd_softmax(
-    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
-    float * src0_dd, float * src1_dd, float * dst_dd, const cudaStream_t & main_stream) {
-    
-    
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32);
-
-    const int64_t ne00 = src0->ne[0];
-    const int64_t nrows = ggml_nrows(src0);
-
-    add_f32_f32_f32_cuda(src0_dd, src1_dd,dst_dd, ne00, nrows, main_stream);
-
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
-    
-}
-
-static void ggml_cuda_op_qk_slsm_flatten(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const ggml_cuda_op_qk_slsm_flatten_t op){
-    const int64_t nrows0 = ggml_nrows(src0);
-
-    const bool use_src1 = src1 != nullptr;
-    const int64_t nrows1 = use_src1 ? ggml_nrows(src1) : 1;
-
-    GGML_ASSERT(!use_src1 || src1->backend != GGML_BACKEND_GPU_SPLIT);
-    GGML_ASSERT(              dst->backend != GGML_BACKEND_GPU_SPLIT);
-
-    ggml_tensor_extra_gpu * src0_extra =            (ggml_tensor_extra_gpu *) src0->extra;
-    ggml_tensor_extra_gpu * src1_extra = use_src1 ? (ggml_tensor_extra_gpu *) src1->extra : nullptr;
-    ggml_tensor_extra_gpu * dst_extra  =            (ggml_tensor_extra_gpu *)  dst->extra;
-
-    const bool src0_on_device =             src0->backend == GGML_BACKEND_GPU || src0->backend == GGML_BACKEND_GPU_SPLIT;
-    const bool src1_on_device = use_src1 && src1->backend == GGML_BACKEND_GPU;
-    const bool  dst_on_device =              dst->backend == GGML_BACKEND_GPU;
-
-    const bool src1_stays_on_host = use_src1 && dst->op == GGML_OP_SCALE;
-
-    // dd = data device
-    float * src0_ddf = nullptr;
-    float * src1_ddf = nullptr;
-    float *  dst_ddf = nullptr;
-
-    // as = actual size
-    size_t src0_asf = 0;
-    size_t src1_asf = 0;
-    size_t  dst_asf = 0;
-
-    ggml_cuda_set_device(g_main_device);
-    const cudaStream_t main_stream = g_cudaStreams[g_main_device][0];
-
-    if (src0_on_device) {
-        src0_ddf = (float *) src0_extra->data_device[g_main_device];
-    } else {
-        src0_ddf = (float *) ggml_cuda_pool_malloc(ggml_nbytes(src0), &src0_asf);
-        CUDA_CHECK(ggml_cuda_cpy_tensor_2d(src0_ddf, src0, 0, 0, 0, nrows0, main_stream));
-    }
-
-    if (use_src1 && !src1_stays_on_host) {
-        if (src1_on_device) {
-            src1_ddf = (float *) src1_extra->data_device[g_main_device];
-        } else {
-            src1_ddf = (float *) ggml_cuda_pool_malloc(ggml_nbytes(src1), &src1_asf);
-            CUDA_CHECK(ggml_cuda_cpy_tensor_2d(src1_ddf, src1, 0, 0, 0, nrows1, main_stream));
-        }
-    }
-    if (dst_on_device) {
-        dst_ddf = (float *) dst_extra->data_device[g_main_device];
-    } else {
-        dst_ddf = (float *) ggml_cuda_pool_malloc(ggml_nbytes(dst), &dst_asf);
-    }
-
-    // do the computation
-    op(src0, src1, dst, src0_ddf, src1_ddf, dst_ddf, main_stream);
-    CUDA_CHECK(cudaGetLastError());
-
-    // copy dst to host if necessary
-    if (!dst_on_device) {
-        CUDA_CHECK(cudaMemcpyAsync(dst->data, dst_ddf, ggml_nbytes(dst), cudaMemcpyDeviceToHost, main_stream));
-    }
-
-    if (src0_asf > 0) {
-        ggml_cuda_pool_free(src0_ddf, src0_asf);
-    }
-    if (src1_asf > 0) {
-        ggml_cuda_pool_free(src1_ddf, src1_asf);
-    }
-    if (dst_asf > 0) {
-        ggml_cuda_pool_free(dst_ddf, dst_asf);
-    }
-
-    if (dst->backend == GGML_BACKEND_CPU) {
-        CUDA_CHECK(cudaDeviceSynchronize());
-    }
-}
-
-static void ggml_cuda_set_peer_access(const int n_tokens) {
-    static bool peer_access_enabled = false;
-
-    const bool enable_peer_access = n_tokens <= GGML_CUDA_PEER_MAX_BATCH_SIZE;
-
-    if (peer_access_enabled == enable_peer_access) {
-        return;
-    }
-
-#ifdef NDEBUG
-    for (int id = 0; id < g_device_count; ++id) {
-        CUDA_CHECK(ggml_cuda_set_device(id));
-
-        for (int id_other = 0; id_other < g_device_count; ++id_other) {
-            if (id == id_other) {
-                continue;
-            }
-            if (id != g_main_device && id_other != g_main_device) {
-                continue;
-            }
-
-            int can_access_peer;
-            CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access_peer, id, id_other));
-            if (can_access_peer) {
-                if (enable_peer_access) {
-                    CUDA_CHECK(cudaDeviceEnablePeerAccess(id_other, 0));
-                } else {
-                    CUDA_CHECK(cudaDeviceDisablePeerAccess(id_other));
-                }
-            }
-        }
-    }
-#endif // NDEBUG
-
-    peer_access_enabled = enable_peer_access;
-}
 
 
 // my op end
@@ -9386,7 +9349,7 @@ static void ggml_cuda_qk_slsm(
         const struct ggml_tensor * src2,
         const struct ggml_tensor * src3,
               struct ggml_tensor * dst){
-    printf("使用cuda 实现的 qk_slsm 算子\n");
+    //printf("使用cuda 实现的 qk_slsm 算子\n");
     const bool all_on_device =
         (src0->backend == GGML_BACKEND_GPU || src0->backend == GGML_BACKEND_GPU_SPLIT) &&
         (src1->backend == GGML_BACKEND_GPU) &&

@@ -805,13 +805,13 @@ extern "C" {
     // my operations start
 
     struct ggml_tensor * ggml_QK_scaled_softmax(
-        ggml_context * ctx,
-        ggml_tensor * k,
-        ggml_tensor * q,
-        ggml_tensor * kq_scale,
+        struct ggml_context * ctx,
+        struct ggml_tensor * k,
+        struct ggml_tensor * q,
+        struct ggml_tensor * kq_scale,
         float max_alibi_bias,
         const int64_t n_head,
-        ggml_tensor * kq_mask);
+        struct ggml_tensor * kq_mask);
 
     // my operations end
 
