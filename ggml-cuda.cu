@@ -284,6 +284,7 @@ typedef void (*ggml_cuda_op_flatten_t)(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
     const float * src0_dd, const float * src1_dd, float * dst_dd, const cudaStream_t & main_stream);
 // my op start
+typedef void (*ggml_cuda_myfunc_t)(const ggml_tensor * src0, const ggml_tensor * src1,const ggml_tensor* src2,const ggml_tensor* src3, ggml_tensor * dst);
 typedef void (*ggml_cuda_op_qk_slsm_t)(
     const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
     const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
@@ -9364,7 +9365,8 @@ static void ggml_cuda_qk_slsm(
         }
     }
     // 使用cublas运算时进行scale
-    ggml_cuda_op_qk_slsm(src0, src1, src2, src3, dst, ggml_cuda_op_qk_slsm_cublas);
+    ggml_cuda_mul_mat_mat_batched_cublas(src0, src1, dst);
+    //ggml_cuda_op_qk_slsm(src0, src1, src2, src3, dst, ggml_cuda_op_qk_slsm_cublas);
 
 }
 // my op end
@@ -9803,6 +9805,8 @@ void ggml_cuda_free_scratch() {
 bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_tensor * tensor) {
     if (!g_cublas_loaded) return false;
 
+    bool myop=false;
+    ggml_cuda_myfunc_t myfunc;
     ggml_cuda_func_t func;
     const bool src0_on_device = tensor->src[0] != nullptr && (tensor->src[0]->backend != GGML_BACKEND_CPU);
     const bool any_on_device = tensor->backend == GGML_BACKEND_GPU || src0_on_device
@@ -9918,7 +9922,8 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
             if (!any_on_device && !ggml_cuda_can_mul_mat(tensor->src[0], tensor->src[1], tensor)) {
                 return false;
             }
-            ggml_cuda_qk_slsm(tensor->src[0],tensor->src[1],tensor->src[2],tensor->src[3],tensor);
+            myop=true;
+            myfunc=ggml_cuda_qk_slsm;
             return true;
         // my op end
         default:
@@ -9931,7 +9936,13 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
     if (params->type == GGML_TASK_INIT || params->type == GGML_TASK_FINALIZE) {
         return true;
     }
-    func(tensor->src[0], tensor->src[1], tensor);
+    if(myop){
+        myfunc(tensor->src[0], tensor->src[1], tensor->src[2], tensor->src[3],tensor);
+    }
+    else{
+        func(tensor->src[0], tensor->src[1], tensor);
+    }
+    
 
     // CUDA_CHECK(cudaDeviceSynchronize());
 

@@ -16900,6 +16900,37 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             {
                 GGML_ASSERT(false);
             } break;
+        // my op start
+        case GGML_OP_QK_SLSM:
+            {
+            n_tasks = n_threads;
+
+                // TODO: use different scheduling for different matrix sizes
+                //const int nr0 = ggml_nrows(node->src[0]);
+                //const int nr1 = ggml_nrows(node->src[1]);
+
+                //n_tasks = MIN(n_threads, MAX(1, nr0/128));
+                //printf("nr0 = %8d, nr1 = %8d, nr0*nr1 = %8d, n_tasks%d\n", nr0, nr1, nr0*nr1, n_tasks);
+
+#if defined(GGML_USE_CUBLAS)
+                if (ggml_cuda_can_mul_mat(node->src[0], node->src[1], node)) {
+                    n_tasks = 1; // TODO: this actually is doing nothing
+                                 //       the threads are still spinning
+                }
+#elif defined(GGML_USE_CLBLAST)
+                if (ggml_cl_can_mul_mat(node->src[0], node->src[1], node)) {
+                    n_tasks = 1; // TODO: this actually is doing nothing
+                                 //       the threads are still spinning
+                }
+#endif
+#if defined(GGML_USE_ACCELERATE) || defined(GGML_USE_OPENBLAS)
+                if (ggml_compute_forward_mul_mat_use_blas(node->src[0], node->src[1], node)) {
+                    n_tasks = 1; // TODO: this actually is doing nothing
+                                 //       the threads are still spinning
+                }
+#endif
+            } break;
+        //my op end
         default:
             {
                 printf("%s: op %s not implemented\n", __func__, ggml_op_name(node->op));
