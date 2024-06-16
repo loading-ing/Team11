@@ -3143,6 +3143,35 @@ struct ggml_tensor * ggml_QK_scaled_softmax(
 
 }
 
+struct ggml_tensor * ggml_masked_softmax(
+    struct ggml_context * ctx,
+        struct ggml_tensor * a,
+        struct ggml_tensor * b){
+    // TODO: support less-strict constraint
+    //       GGML_ASSERT(ggml_can_repeat(b, a));
+    bool inplace = false;
+    GGML_ASSERT(ggml_can_repeat_rows(b, a));
+
+    bool is_node = false;
+
+    if (!inplace && (a->grad || b->grad)) {
+        // TODO: support backward pass for broadcasting
+        GGML_ASSERT(ggml_are_same_shape(a, b));
+        is_node = true;
+    }
+
+    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+
+    result->op   = GGML_OP_MASKED_SOFTMAX;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+    result->src[1] = b;
+    result->src[2] = NULL;
+
+    return result;
+}
+
+
 // my op implementation end
 
 // ggml_dup
@@ -16930,6 +16959,10 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                 }
 #endif
             } break;
+        case GGML_OP_MASKED_SOFTMAX:
+            {
+                n_tasks = n_threads;
+            } break;
         //my op end
         default:
             {
@@ -17477,7 +17510,11 @@ struct ggml_cplan ggml_graph_plan(struct ggml_cgraph * cgraph, int n_threads) {
                     // }
                     // //选1还是0
                 }break;
-
+            case GGML_OP_MASKED_SOFTMAX:
+                {
+                    n_tasks = n_threads;
+                    cur = ggml_type_size(node->type)*node->src[0]->ne[0]*n_tasks;
+                } break;
             // my op end
             default:
                 break;

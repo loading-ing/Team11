@@ -468,7 +468,7 @@ extern "C" {
 
         // my op start
         GGML_OP_QK_SLSM,
-
+        GGML_OP_MASKED_SOFTMAX,
         //my op end
 
         GGML_OP_COUNT,
@@ -812,6 +812,11 @@ extern "C" {
         float max_alibi_bias,
         const int64_t n_head,
         struct ggml_tensor * kq_mask);
+
+    struct ggml_tensor * ggml_masked_softmax(
+        struct ggml_context * ctx,
+        struct ggml_tensor * a,
+        struct ggml_tensor * b);
 
     // my operations end
 

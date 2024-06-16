@@ -5167,16 +5167,17 @@ static __global__ void soft_max_f32(const float * x, float * dst, const int ncol
     }
 }
 // my op start
-static __global__ void add_soft_max_f32(float * x, const float * y,float * dst, const int ncols) {
+static __global__ void add_softmax(float * x, const float * y,float * dst, const int ncols) {
     const int row = blockDim.x*blockIdx.x + threadIdx.x;
     const int block_size = blockDim.y;
     const int tid = threadIdx.y;
-
+    
+    
     float max_val = -INFINITY;
 
     for (int col = tid; col < ncols; col += block_size) {
         const int i = row*ncols + col;
-        x[i]=x[i]+y[i];
+        x[i] += y[i];
         max_val = max(max_val, x[i]);
     }
 
@@ -5286,12 +5287,12 @@ static void add_f16_f32_f16_softmax_cuda(const half * x, const float * y, half *
     add_f16_f32_f16_softmax<<<num_blocks, CUDA_ADD_BLOCK_SIZE, 0, stream>>>(x, y, dst, k);
 }
 
-static void add_f32_f32_f32_cuda(float * x, float *y ,float * dst, const int ncols_x, const int nrows_x, cudaStream_t stream) {
-    const dim3 block_dims(1, WARP_SIZE, 1);
-    const dim3 block_nums(nrows_x, 1, 1);
-    add_soft_max_f32<<<block_nums, block_dims, 0, stream>>>(x, y,dst, ncols_x);
+// static void add_f32_f32_f32_cuda(float * x, float *y ,float * dst, const int ncols_x, const int nrows_x, cudaStream_t stream) {
+//     const dim3 block_dims(1, WARP_SIZE, 1);
+//     const dim3 block_nums(nrows_x, 1, 1);
+//     add_soft_max_f32<<<block_nums, block_dims, 0, stream>>>(x, y,dst, ncols_x);
 
-}
+// }
 // my op end
 
 static void add_f16_f32_f32_cuda(const half * x, const float * y, float * dst, const int k, cudaStream_t stream) {
@@ -6407,6 +6408,16 @@ static void soft_max_f32_cuda(const float * x, float * dst, const int ncols_x, c
     soft_max_f32<<<block_nums, block_dims, 0, stream>>>(x, dst, ncols_x);
 }
 
+// my op start
+static void add_softmax_cuda(float * x,float * y, float * dst, const int ncols_x, const int nrows_x, cudaStream_t stream) {
+    const dim3 block_dims(1, WARP_SIZE, 1);
+    const dim3 block_nums(nrows_x, 1, 1);
+    //soft_max_f32<<<block_nums, block_dims, 0, stream>>>(x,y, dst, ncols_x);
+    add_softmax<<<block_nums, block_dims, 0, stream>>>(x,y, dst, ncols_x);
+}
+
+// my op end
+
 static void im2col_f32_f16_cuda(const float * x, half * dst,
     int OH, int IW, int IH, int OW, int IC,
     int KH, int KW, int N,  int ofs0, int ofs1,
@@ -6840,6 +6851,7 @@ inline void ggml_cuda_op_add(
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
     const int64_t ne10 = src1->ne[0];
+    GGML_ASSERT(src1->ne[0] == src0->ne[0]);
     const int64_t ne11 = src1->ne[1];
 
     if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
@@ -8483,7 +8495,7 @@ inline void ggml_cuda_op_qk_slms_subadd_softmax(
     const int64_t ne00 = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
 
-    add_f32_f32_f32_cuda(src0_dd, src1_dd,dst_dd, ne00, nrows, main_stream);
+    //add_f32_f32_f32_cuda(src0_dd, src1_dd,dst_dd, ne00, nrows, main_stream);
 
     (void) src1;
     (void) dst;
@@ -9542,6 +9554,23 @@ static void ggml_cuda_op_qk_scale(const ggml_tensor * src0, const ggml_tensor * 
     ggml_cuda_pool_free(dst_f16, dst_as);
 }
 
+static void ggml_cuda_op_add_softmax(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    float * src0_dd, float * src1_dd, float * dst_dd, const cudaStream_t & main_stream){
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    const int64_t ne00 = src0->ne[0];
+    const int64_t nrows = ggml_nrows(src0);
+
+    //soft_max_f32_cuda(src0_dd, dst_dd, ne00, nrows, main_stream);
+    add_softmax_cuda(src0_dd, src1_dd, dst_dd,ne00,nrows,main_stream);
+    (void) src1;
+    (void) dst;
+    (void) src1_dd;
+}
+
 static void ggml_cuda_qk_slsm(
         const struct ggml_tensor * src0,
         const struct ggml_tensor * src1,
@@ -9574,6 +9603,89 @@ static void ggml_cuda_qk_slsm(
     //ggml_cuda_mul_mat_mat_batched_cublas(src0, src1, dst);
     ggml_cuda_op_qk_scale(src0,src1,src2,dst);
     //ggml_cuda_op_qk_slsm(src0, src1, src2, src3, dst, ggml_cuda_op_qk_slsm_cublas);
+    //ggml_cuda_op_add_softmax(dst,src3,dst);
+}
+
+static void ggml_cuda_masked_soft_max(
+        const struct ggml_tensor * src0,
+        const struct ggml_tensor * src1,
+              struct ggml_tensor * dst){
+    const int64_t nrows0 = ggml_nrows(src0);
+
+    const bool use_src1 = src1 != nullptr;
+    const int64_t nrows1 = use_src1 ? ggml_nrows(src1) : 1;
+
+    GGML_ASSERT(!use_src1 || src1->backend != GGML_BACKEND_GPU_SPLIT);
+    GGML_ASSERT(              dst->backend != GGML_BACKEND_GPU_SPLIT);
+
+    ggml_tensor_extra_gpu * src0_extra =            (ggml_tensor_extra_gpu *) src0->extra;
+    ggml_tensor_extra_gpu * src1_extra = use_src1 ? (ggml_tensor_extra_gpu *) src1->extra : nullptr;
+    ggml_tensor_extra_gpu * dst_extra  =            (ggml_tensor_extra_gpu *)  dst->extra;
+
+    const bool src0_on_device =             src0->backend == GGML_BACKEND_GPU || src0->backend == GGML_BACKEND_GPU_SPLIT;
+    const bool src1_on_device = use_src1 && src1->backend == GGML_BACKEND_GPU;
+    const bool  dst_on_device =              dst->backend == GGML_BACKEND_GPU;
+
+    const bool src1_stays_on_host = use_src1 && dst->op == GGML_OP_SCALE;
+
+    // dd = data device
+    float * src0_ddf = nullptr;
+    float * src1_ddf = nullptr;
+    float *  dst_ddf = nullptr;
+
+    // as = actual size
+    size_t src0_asf = 0;
+    size_t src1_asf = 0;
+    size_t  dst_asf = 0;
+
+    ggml_cuda_set_device(g_main_device);
+    const cudaStream_t main_stream = g_cudaStreams[g_main_device][0];
+
+    if (src0_on_device) {
+        src0_ddf = (float *) src0_extra->data_device[g_main_device];
+    } else {
+        src0_ddf = (float *) ggml_cuda_pool_malloc(ggml_nbytes(src0), &src0_asf);
+        CUDA_CHECK(ggml_cuda_cpy_tensor_2d(src0_ddf, src0, 0, 0, 0, nrows0, main_stream));
+    }
+
+    if (use_src1 && !src1_stays_on_host) {
+        if (src1_on_device) {
+            src1_ddf = (float *) src1_extra->data_device[g_main_device];
+        } else {
+            src1_ddf = (float *) ggml_cuda_pool_malloc(ggml_nbytes(src1), &src1_asf);
+            CUDA_CHECK(ggml_cuda_cpy_tensor_2d(src1_ddf, src1, 0, 0, 0, nrows1, main_stream));
+        }
+    }
+    if (dst_on_device) {
+        dst_ddf = (float *) dst_extra->data_device[g_main_device];
+    } else {
+        dst_ddf = (float *) ggml_cuda_pool_malloc(ggml_nbytes(dst), &dst_asf);
+    }
+
+    // do the computation
+    //op(src0, src1, dst, src0_ddf, src1_ddf, dst_ddf, main_stream);
+    ggml_cuda_op_add_softmax(src0, src1, dst, src0_ddf, src1_ddf, dst_ddf, main_stream);
+    
+    CUDA_CHECK(cudaGetLastError());
+
+    // copy dst to host if necessary
+    if (!dst_on_device) {
+        CUDA_CHECK(cudaMemcpyAsync(dst->data, dst_ddf, ggml_nbytes(dst), cudaMemcpyDeviceToHost, main_stream));
+    }
+
+    if (src0_asf > 0) {
+        ggml_cuda_pool_free(src0_ddf, src0_asf);
+    }
+    if (src1_asf > 0) {
+        ggml_cuda_pool_free(src1_ddf, src1_asf);
+    }
+    if (dst_asf > 0) {
+        ggml_cuda_pool_free(dst_ddf, dst_asf);
+    }
+
+    if (dst->backend == GGML_BACKEND_CPU) {
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
 
 }
 // my op end
@@ -10139,6 +10251,9 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
             }
             myfunc(tensor->src[0], tensor->src[1], tensor->src[2], tensor->src[3],tensor);
             return true;
+        case GGML_OP_MASKED_SOFTMAX:
+            func = ggml_cuda_masked_soft_max;
+            break;
         // my op end
         default:
             return false;

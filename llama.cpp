@@ -4621,19 +4621,31 @@ static struct ggml_tensor * llm_build_kqv(
         k->src[1] = k_cpy;
     }
 
-    // struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
+    struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
+    cb(kq, "kq", il);
+
+    kq = ggml_scale(ctx, kq, kq_scale);
+    cb(kq, "kq_scaled", il);
+
+    if (max_alibi_bias > 0.0f) {
+        // TODO: n_head or n_head_kv
+        // TODO: K-shift is likely not working
+        // TODO: change to ggml_add
+        kq = ggml_alibi(ctx, kq, /*n_past*/ 0, n_head, max_alibi_bias);
+        cb(kq, "kq_scaled_alibi", il);
+    }
+
+    kq = ggml_add(ctx, kq, kq_mask);
+    cb(kq, "kq_masked", il);
+
+    kq = ggml_soft_max(ctx, kq);
+    cb(kq, "kq_soft_max", il);
+
+    // my op start
+    // QK scaled and softmax
+    // struct ggml_tensor * kq = ggml_QK_scaled_softmax(ctx, k, q, kq_scale, max_alibi_bias, n_head, kq_mask);
     // cb(kq, "kq", il);
-
-    // kq = ggml_scale(ctx, kq, kq_scale);
-    // cb(kq, "kq_scaled", il);
-
-    // if (max_alibi_bias > 0.0f) {
-    //     // TODO: n_head or n_head_kv
-    //     // TODO: K-shift is likely not working
-    //     // TODO: change to ggml_add
-    //     kq = ggml_alibi(ctx, kq, /*n_past*/ 0, n_head, max_alibi_bias);
-    //     cb(kq, "kq_scaled_alibi", il);
-    // }
+    //cb(kq, "kq_scaled", il);
 
     // kq = ggml_add(ctx, kq, kq_mask);
     // cb(kq, "kq_masked", il);
@@ -4641,19 +4653,9 @@ static struct ggml_tensor * llm_build_kqv(
     // kq = ggml_soft_max(ctx, kq);
     // cb(kq, "kq_soft_max", il);
 
-    // my op start
-    // QK scaled and softmax
-    struct ggml_tensor * kq = ggml_QK_scaled_softmax(ctx, k, q, kq_scale, max_alibi_bias, n_head, kq_mask);
-    cb(kq, "kq", il);
-    //cb(kq, "kq_scaled", il);
-
-    // kq = ggml_scale(ctx, kq, kq_scale);
-    // cb(kq, "kq_scaled", il);
-    kq = ggml_add(ctx, kq, kq_mask);
-    cb(kq, "kq_masked", il);
-
-    kq = ggml_soft_max(ctx, kq);
-    cb(kq, "kq_soft_max", il);
+    // kq=ggml_masked_softmax(ctx, kq, kq_mask);
+    // cb(kq, "kq_masked", il);
+    // my op end
 
     // split cached v into n_head heads
     struct ggml_tensor * v =
