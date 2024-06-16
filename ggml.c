@@ -3131,7 +3131,7 @@ struct ggml_tensor * ggml_QK_scaled_softmax(
 
     const int64_t ne[4] = { k->ne[1], q->ne[1], q->ne[2], q->ne[3] };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, MAX(k->n_dims, q->n_dims), ne);
-
+    
     result->op   = GGML_OP_QK_SLSM;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
     result->src[0] = k;
@@ -17470,13 +17470,13 @@ struct ggml_cplan ggml_graph_plan(struct ggml_cgraph * cgraph, int n_threads) {
                         cur = ggml_type_size(vec_dot_type)*ggml_nelements(node->src[1])/ggml_blck_size(vec_dot_type);
                     }
 
-                    n_tasks = n_threads;
+                    // n_tasks = n_threads;
 
-                    if (ggml_is_quantized(node->src[0]->type)) {
-                        cur += ggml_type_size(GGML_TYPE_F32) * node->src[1]->ne[0] * n_tasks;
-                    }
-                    //选1还是0
-                }
+                    // if (ggml_is_quantized(node->src[0]->type)) {
+                    //     cur += ggml_type_size(GGML_TYPE_F32) * node->src[1]->ne[0] * n_tasks;
+                    // }
+                    // //选1还是0
+                }break;
 
             // my op end
             default:
