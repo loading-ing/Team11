@@ -4650,11 +4650,11 @@ static struct ggml_tensor * llm_build_kqv(
     kq = ggml_add(ctx, kq, kq_mask);
     cb(kq, "kq_masked", il);
 
-    // kq = ggml_soft_max(ctx, kq);
-    // cb(kq, "kq_soft_max", il);
+    kq = ggml_soft_max(ctx, kq);
+    cb(kq, "kq_soft_max", il);
 
-    kq=ggml_masked_softmax(ctx, kq, kq_mask);
-    cb(kq, "kq_masked", il);
+    // kq=ggml_masked_softmax(ctx, kq, kq_mask);
+    // cb(kq, "kq_masked", il);
     // my op end
 
     // split cached v into n_head heads
