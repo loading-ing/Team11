@@ -5208,68 +5208,68 @@ static __global__ void add_softmax(float * x, const float * y,float * dst, const
 
 }
 
-//ReductionOp：模板参数，T：用于归约操作的数据类型，block_size：CUDA块大小
-template<template<typename> typename ReductionOp, typename T, int block_size>
-__inline__ __device__ T BlockAllReduce(T val) {
-  typedef cub::BlockReduce<T, block_size> BlockReduce;
-  //声明共享内存变量，用于在块内的归约操作中存储中间结果
-  __shared__ typename BlockReduce::TempStorage temp_storage;
-  //声明  共享内存变量result_broadcast，用于在块内广播归约操作的结果
-  __shared__ T result_broadcast;
-  //执行归约操作
-  T result = BlockReduce(temp_storage).Reduce(val, ReductionOp<T>());
-  if (threadIdx.x == 0) { result_broadcast = result; }
-  //线程同步
-  __syncthreads();
-  return result_broadcast;
-}
+// //ReductionOp：模板参数，T：用于归约操作的数据类型，block_size：CUDA块大小
+// template<template<typename> typename ReductionOp, typename T, int block_size>
+// __inline__ __device__ T BlockAllReduce(T val) {
+//   typedef cub::BlockReduce<T, block_size> BlockReduce;
+//   //声明共享内存变量，用于在块内的归约操作中存储中间结果
+//   __shared__ typename BlockReduce::TempStorage temp_storage;
+//   //声明  共享内存变量result_broadcast，用于在块内广播归约操作的结果
+//   __shared__ T result_broadcast;
+//   //执行归约操作
+//   T result = BlockReduce(temp_storage).Reduce(val, ReductionOp<T>());
+//   if (threadIdx.x == 0) { result_broadcast = result; }
+//   //线程同步
+//   __syncthreads();
+//   return result_broadcast;
+// }
 
-static __global__ void my_soft_max_f32(const float * x, float * dst, const int rows,const int cols,int pack_size,int block_size){
-    //共享内存定义
-    extern __shared__ __align__(sizeof(float)) unsigned char shared_buf[];
-    auto* buf = reinterpret_cast<float*>(shared_buf);
-    //获取当前线程id
-    const int tid = threadIdx.x;
-    assert(cols % pack_size == 0);
-    const int num_packs = cols / pack_size;
-    //外层循环用来迭代每一行。由于每一个线程块可能处理多行数据，使用blockidx.x确定当前线程块处理的起始行
-    for (int64_t row = blockIdx.x; row < rows; row += gridDim.x) {
-        //计算当前行的偏移量，并初始化输入和输出指针。初始化一个变量来跟踪线程的最大值
-        const int64_t row_offset = row * cols;
-        const float* row_x = x + row_offset;
-        float* row_y = y + row_offset;
-        float thread_max = -Inf<float>();
-        //数据包加载和最大值查找
-        for (int pack_id = tid; pack_id < num_packs; pack_id += block_size) {
-        float pack[pack_size];
-        MultiFetch<float, float, pack_size>()(pack, row_x + pack_id * pack_size);
-    #pragma unroll
-        for (int i = 0; i < pack_size; ++i) {
-            buf[i * num_packs + pack_id] = pack[i];
-            thread_max = max(thread_max, pack[i]);
-        }
-        }
-        //使用块内归约操作找到整个块的最大值和总和
-        const float row_max = BlockAllReduce<MaxOp, float, block_size>(thread_max);
-        float thread_sum = 0;
-        for (int col = tid; col < cols; col += block_size) {
-        const float exp_x = exp(buf[col] - row_max);
-        buf[col] = exp_x;
-        thread_sum += exp_x;
-        }
-        const float row_sum = BlockAllReduce<SumOp, float, block_size>(thread_sum);
-        //计算softmax值并存储
-        for (int pack_id = tid; pack_id < num_packs; pack_id += block_size) {
-        float pack[pack_size];
-    #pragma unroll
-        for (int i = 0; i < pack_size; ++i) {
-            pack[i] = buf[i * num_packs + pack_id] / row_sum;
-            thread_max = max(thread_max, pack[i]);
-        }
-        MultiStore<float, float, pack_size>()(row_y + pack_id * pack_size, pack);
-        }
-    }
-}
+// static __global__ void my_soft_max_f32(const float * x, float * dst, const int rows,const int cols,int pack_size,int block_size){
+//     //共享内存定义
+//     extern __shared__ __align__(sizeof(float)) unsigned char shared_buf[];
+//     auto* buf = reinterpret_cast<float*>(shared_buf);
+//     //获取当前线程id
+//     const int tid = threadIdx.x;
+//     assert(cols % pack_size == 0);
+//     const int num_packs = cols / pack_size;
+//     //外层循环用来迭代每一行。由于每一个线程块可能处理多行数据，使用blockidx.x确定当前线程块处理的起始行
+//     for (int64_t row = blockIdx.x; row < rows; row += gridDim.x) {
+//         //计算当前行的偏移量，并初始化输入和输出指针。初始化一个变量来跟踪线程的最大值
+//         const int64_t row_offset = row * cols;
+//         const float* row_x = x + row_offset;
+//         float* row_y = y + row_offset;
+//         float thread_max = -Inf<float>();
+//         //数据包加载和最大值查找
+//         for (int pack_id = tid; pack_id < num_packs; pack_id += block_size) {
+//         float pack[pack_size];
+//         MultiFetch<float, float, pack_size>()(pack, row_x + pack_id * pack_size);
+//     #pragma unroll
+//         for (int i = 0; i < pack_size; ++i) {
+//             buf[i * num_packs + pack_id] = pack[i];
+//             thread_max = max(thread_max, pack[i]);
+//         }
+//         }
+//         //使用块内归约操作找到整个块的最大值和总和
+//         const float row_max = BlockAllReduce<MaxOp, float, block_size>(thread_max);
+//         float thread_sum = 0;
+//         for (int col = tid; col < cols; col += block_size) {
+//         const float exp_x = exp(buf[col] - row_max);
+//         buf[col] = exp_x;
+//         thread_sum += exp_x;
+//         }
+//         const float row_sum = BlockAllReduce<SumOp, float, block_size>(thread_sum);
+//         //计算softmax值并存储
+//         for (int pack_id = tid; pack_id < num_packs; pack_id += block_size) {
+//         float pack[pack_size];
+//     #pragma unroll
+//         for (int i = 0; i < pack_size; ++i) {
+//             pack[i] = buf[i * num_packs + pack_id] / row_sum;
+//             thread_max = max(thread_max, pack[i]);
+//         }
+//         MultiStore<float, float, pack_size>()(row_y + pack_id * pack_size, pack);
+//         }
+//     }
+// }
 // my op end
 
 static __global__ void scale_f32(const float * x, float * dst, const float scale, const int k) {
@@ -6471,17 +6471,19 @@ static void soft_max_f32_cuda(const float * x, float * dst, const int ncols_x, c
 
 // my op start
 static void add_softmax_cuda(float * x,float * y, float * dst, const int ncols_x, const int nrows_x, cudaStream_t stream) {
-    const dim3 block_dims(1, WARP_SIZE, 1);
-    const dim3 block_nums(nrows_x, 1, 1);
+    // const dim3 block_dims(1, WARP_SIZE, 1);
+    // const dim3 block_nums(nrows_x, 1, 1);
     //soft_max_f32<<<block_nums, block_dims, 0, stream>>>(x,y, dst, ncols_x);
+    const int block_nums=nrows_x;
+    const int block_dims=ncols_x;
     add_softmax<<<block_nums, block_dims, 0, stream>>>(x,y, dst, ncols_x);
 }
 
-static void my_softmax_cuda(const float * x, float * dst, const int ncols_x, const int nrows_x, cudaStream_t stream){
-    int gridsize=nrows_x;
-    int block_size=ncols_x;
-    my_soft_max_f32<<<gridsize, block_size, 0, stream>>>(x, dst, nrows_x,ncols_x);
-}
+// static void my_softmax_cuda(const float * x, float * dst, const int ncols_x, const int nrows_x, cudaStream_t stream){
+//     int gridsize=nrows_x;
+//     int block_size=ncols_x;
+//     my_soft_max_f32<<<gridsize, block_size, 0, stream>>>(x, dst, nrows_x,ncols_x);
+// }
 
 // my op end
 
