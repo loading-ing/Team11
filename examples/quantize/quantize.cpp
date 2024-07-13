@@ -32,6 +32,9 @@ static const std::vector<struct quant_option> QUANT_OPTIONS = {
     { "Q8_0",   LLAMA_FTYPE_MOSTLY_Q8_0,   " 6.70G, +0.0004 ppl @ LLaMA-v1-7B", },
     { "F16",    LLAMA_FTYPE_MOSTLY_F16,    "13.00G              @ 7B", },
     { "F32",    LLAMA_FTYPE_ALL_F32,       "26.00G              @ 7B", },
+    // my op start
+    { "Q8_Q4",   LLAMA_FTYPE_MOSTLY_Q8_Q4,   " test", },
+    // my op end
     // Note: Ensure COPY comes after F32 to avoid ftype 0 from matching.
     { "COPY",   LLAMA_FTYPE_ALL_F32,       "only copy tensors, no quantizing", },
 };

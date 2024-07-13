@@ -4645,7 +4645,7 @@ static struct ggml_tensor * llm_build_kqv(
     // QK scaled and softmax
     struct ggml_tensor * kq = ggml_QK_scaled_softmax(ctx, k, q, kq_scale, max_alibi_bias, n_head, kq_mask);
     cb(kq, "kq", il);
-    cb(kq, "kq_scaled", il);
+    //cb(kq, "kq_scaled", il);
 
     kq = ggml_add(ctx, kq, kq_mask);
     cb(kq, "kq_masked", il);
@@ -8848,7 +8848,10 @@ static ggml_type get_k_quant_type(
         if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) new_type = GGML_TYPE_Q3_K;
     }
     else if (name.find("fc1.weight") != std::string::npos || name.find("fc2.weight") != std::string::npos) {
-        if (ftype == LLAMA_FTYPE_MOSTLY_Q4_0) new_type = GGML_TYPE_Q4_0;
+        // if (ftype == LLAMA_FTYPE_MOSTLY_Q4_0) new_type = GGML_TYPE_Q4_0;
+        // my op start
+        if (ftype == LLAMA_FTYPE_MOSTLY_Q4_0||ftype == LLAMA_FTYPE_MOSTLY_Q8_Q4) new_type = GGML_TYPE_Q4_0;
+        // my op end
         else new_type = GGML_TYPE_Q5_0;
     }
     // This can be used to reduce the size of the Q5_K_S model.
@@ -8907,6 +8910,10 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_Q5_K_S:
         case LLAMA_FTYPE_MOSTLY_Q5_K_M: quantized_type = GGML_TYPE_Q5_K; break;
         case LLAMA_FTYPE_MOSTLY_Q6_K:   quantized_type = GGML_TYPE_Q6_K; break;
+
+        // my op start
+        case LLAMA_FTYPE_MOSTLY_Q8_Q4:  quantized_type = GGML_TYPE_Q4_0; break;
+        // my op end
 
         default: throw std::runtime_error(format("invalid output file type %d\n", ftype));
     }
@@ -9028,6 +9035,20 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         size_t new_size;
 
         if (quantize) {
+            // my op start
+            // LLAMA_LOG_INFO("%36s",ggml_get_name(tensor));
+            if(name.find("fc")!=std::string::npos){
+                LLAMA_LOG_INFO("fc find fc");
+            }
+            if(params->ftype==LLAMA_FTYPE_MOSTLY_Q8_Q4){
+                if(name.find("ffn")!=std::string::npos||name.find("fc")!=std::string::npos){
+                    quantized_type = GGML_TYPE_Q4_0;
+                }
+                else{
+                    quantized_type = GGML_TYPE_Q8_0;
+                }
+            }
+            // my op end
             new_type = quantized_type;
             if (!params->pure) {
                 new_type = get_k_quant_type(qs, new_type, tensor, ftype);
